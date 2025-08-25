@@ -1,0 +1,104 @@
+name: Release Build
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '5.15.2'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2019_64'
+        dir: '${{ github.workspace }}/qt/'
+        install-deps: 'true'
+        modules: 'qtbase qtimageformats'
+        setup-python: 'false'
+
+    - name: Setup MSVC
+      uses: microsoft/setup-msbuild@v1.1
+
+    - name: Setup Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
+
+    - name: Create build directory
+      run: mkdir build
+
+    - name: Generate Makefile
+      run: |
+        cd build
+        qmake ..\ImageBackgroundExpander.pro -spec win32-msvc "CONFIG+=release"
+      shell: cmd
+
+    - name: Build project
+      run: |
+        cd build
+        nmake
+      shell: cmd
+
+    - name: Create deployment directory
+      run: mkdir deploy
+
+    - name: Copy executable
+      run: copy build\release\ImageBackgroundExpander.exe deploy\
+      shell: cmd
+
+    - name: Deploy Qt dependencies
+      run: |
+        cd deploy
+        windeployqt ImageBackgroundExpander.exe --release --no-translations --no-system-d3d-compiler
+      shell: cmd
+
+    - name: Copy additional files
+      run: |
+        copy README.md deploy\
+        echo. > deploy\README.txt
+        echo Image Background Expander v${{ github.event.release.tag_name }} >> deploy\README.txt
+        echo. >> deploy\README.txt
+        echo Visit https://github.com/${{ github.repository }} for more information >> deploy\README.txt
+      shell: cmd
+
+    - name: Create release package
+      run: |
+        cd deploy
+        powershell Compress-Archive -Path * -DestinationPath ..\ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
+      shell: cmd
+
+    - name: Upload release asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
+        asset_name: ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
+        asset_content_type: application/zip
+
+    - name: Create portable version
+      run: |
+        mkdir portable
+        xcopy deploy portable\ /E /I
+        cd portable
+        powershell Compress-Archive -Path * -DestinationPath ..\ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
+      shell: cmd
+
+    - name: Upload portable version
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
+        asset_name: ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
+        asset_content_type: application/zip
