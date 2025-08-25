@@ -1,104 +1,158 @@
 name: Release Build
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+env:
+  QT_VERSION: '6.5.3'
 
 jobs:
+  # Windows构建任务
   build-windows:
+    name: Build Windows
     runs-on: windows-latest
+    continue-on-error: true
     
     steps:
-    - name: Checkout code
+    - name: Checkout
       uses: actions/checkout@v4
-
+      
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        version: '5.15.2'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2019_64'
-        dir: '${{ github.workspace }}/qt/'
-        install-deps: 'true'
-        modules: 'qtbase qtimageformats'
-        setup-python: 'false'
-
-    - name: Setup MSVC
-      uses: microsoft/setup-msbuild@v1.1
-
-    - name: Setup Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: x64
-
-    - name: Create build directory
-      run: mkdir build
-
-    - name: Generate Makefile
+        version: ${{ env.QT_VERSION }}
+        
+    - name: Build
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        cmake --build . --config Release
+        
+    - name: Deploy Qt
       run: |
         cd build
-        qmake ..\ImageBackgroundExpander.pro -spec win32-msvc "CONFIG+=release"
-      shell: cmd
-
-    - name: Build project
+        if (Test-Path "Release\ImageBackgroundExpander.exe") {
+          cd Release
+          windeployqt --release ImageBackgroundExpander.exe
+        } else {
+          windeployqt --release ImageBackgroundExpander.exe  
+        }
+        
+    - name: Package Windows
       run: |
+        # Get version from tag
+        $VERSION = "${{ github.ref_name }}"
+        if ($VERSION -like "v*") {
+          $VERSION = $VERSION.Substring(1)
+        }
+        
+        $PACKAGE = "ImageBackgroundExpander-$VERSION-Windows-x64"
+        New-Item -ItemType Directory $PACKAGE -Force
+        
         cd build
-        nmake
-      shell: cmd
+        if (Test-Path "Release") {
+          Copy-Item "Release\*" "..\$PACKAGE\" -Recurse -Force
+        } else {
+          Get-ChildItem . -Exclude "CMakeFiles","*.cmake","CMakeCache.txt","*.vcxproj*","*.sln" | Copy-Item -Destination "..\$PACKAGE\" -Recurse -Force
+        }
+        
+        cd ..
+        Copy-Item "README.md" "$PACKAGE\" -ErrorAction SilentlyContinue
+        
+        Compress-Archive $PACKAGE "$PACKAGE.zip"
+        Write-Host "Created: $PACKAGE.zip"
+        
+    - name: Upload Windows Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: windows-build
+        path: "ImageBackgroundExpander-*.zip"
+        retention-days: 7
 
-    - name: Create deployment directory
-      run: mkdir deploy
-
-    - name: Copy executable
-      run: copy build\release\ImageBackgroundExpander.exe deploy\
-      shell: cmd
-
-    - name: Deploy Qt dependencies
+  # 创建Release任务
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [build-windows]
+    if: always() && needs.build-windows.result == 'success'
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Prepare release assets
       run: |
-        cd deploy
-        windeployqt ImageBackgroundExpander.exe --release --no-translations --no-system-d3d-compiler
-      shell: cmd
-
-    - name: Copy additional files
+        mkdir -p release-assets
+        find artifacts -name "*.zip" | while read file; do
+          echo "Found asset: $file"
+          cp "$file" release-assets/
+        done
+        
+        ls -la release-assets/
+        
+    - name: Generate release notes
       run: |
-        copy README.md deploy\
-        echo. > deploy\README.txt
-        echo Image Background Expander v${{ github.event.release.tag_name }} >> deploy\README.txt
-        echo. >> deploy\README.txt
-        echo Visit https://github.com/${{ github.repository }} for more information >> deploy\README.txt
-      shell: cmd
-
-    - name: Create release package
-      run: |
-        cd deploy
-        powershell Compress-Archive -Path * -DestinationPath ..\ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
-      shell: cmd
-
-    - name: Upload release asset
-      uses: actions/upload-release-asset@v1
+        # Get version from tag
+        VERSION="${{ github.ref_name }}"
+        if [[ $VERSION == v* ]]; then
+          VERSION=${VERSION#v}
+        fi
+        
+        # Create release notes using echo
+        echo "# ImageBackgroundExpander $VERSION" > release-notes.md
+        echo "" >> release-notes.md
+        echo "## 📦 可用平台" >> release-notes.md
+        
+        # Check which platforms are available
+        if find artifacts/windows-build -name "*.zip" 2>/dev/null | grep -q .; then
+          echo "- ✅ **Windows** - 便携版ZIP包" >> release-notes.md
+        else
+          echo "- ❌ **Windows** - 构建失败" >> release-notes.md
+        fi
+        
+        # Add usage instructions
+        echo "" >> release-notes.md
+        echo "## 🚀 如何使用" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "1. 根据您的操作系统下载对应的安装包" >> release-notes.md
+        echo "2. Windows: 解压ZIP文件，运行ImageBackgroundExpander.exe" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "## ✨ 新功能" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "- 🎯 图片选择时自动跳转到上次选择的路径" >> release-notes.md
+        echo "- 🔧 现代化构建系统（CMake + Qt6）" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "## 📝 更新内容" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "详见提交记录中的更改。" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "## 🐛 问题反馈" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "如遇到问题，请在GitHub Issues中反馈。" >> release-notes.md
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: ImageBackgroundExpander ${{ github.ref_name }}
+        body_path: release-notes.md
+        files: release-assets/*
+        draft: false
+        prerelease: false
+        fail_on_unmatched_files: false
+        generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
-        asset_name: ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64.zip
-        asset_content_type: application/zip
-
-    - name: Create portable version
-      run: |
-        mkdir portable
-        xcopy deploy portable\ /E /I
-        cd portable
-        powershell Compress-Archive -Path * -DestinationPath ..\ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
-      shell: cmd
-
-    - name: Upload portable version
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
-        asset_name: ImageBackgroundExpander-${{ github.event.release.tag_name }}-Windows-x64-Portable.zip
-        asset_content_type: application/zip

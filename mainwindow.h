@@ -60,6 +60,10 @@ private:
     
     void updateColorButton();
     void setControlsEnabled(bool enabled);
+    
+    // 路径记忆功能
+    void loadLastImageDirectory();
+    void saveLastImageDirectory(const QString &directory);
 
     // UI组件
     QWidget *m_centralWidget;
@@ -94,6 +98,9 @@ private:
     // 状态栏
     QStatusBar *m_statusBar;
     QLabel *m_imageInfoLabel;
+    
+    // 路径记忆
+    QString m_lastImageDirectory;
     QLabel *m_colorInfoLabel;
     QProgressBar *m_progressBar;
     

@@ -19,6 +19,8 @@
 #include <QStatusBar>
 #include <QProgressBar>
 #include <QKeySequence>
+#include <QSettings>
+#include <QStandardPaths>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -46,6 +48,9 @@ MainWindow::MainWindow(QWidget *parent)
     
     // 连接信号槽
     connectSignals();
+    
+    // 加载上次选择的路径
+    loadLastImageDirectory();
     
     // 初始状态
     setControlsEnabled(false);
@@ -308,12 +313,17 @@ void MainWindow::connectSignals()
 void MainWindow::openImage()
 {
     QString fileName = QFileDialog::getOpenFileName(this,
-        "打开图像文件", "",
+        "打开图像文件", m_lastImageDirectory,
         "图像文件 (*.png *.jpg *.jpeg *.bmp *.gif *.tiff);;所有文件 (*)");
     
     if (!fileName.isEmpty()) {
         if (m_imageViewer->loadImage(fileName)) {
             m_currentImagePath = fileName;
+            
+            // 保存选择的目录路径
+            QFileInfo fileInfo(fileName);
+            saveLastImageDirectory(fileInfo.absolutePath());
+            
             setControlsEnabled(true);
             updateStatusBar();
             
@@ -347,11 +357,15 @@ void MainWindow::exportImage()
     }
     
     QString fileName = QFileDialog::getSaveFileName(this,
-        "导出图像", "",
+        "导出图像", m_lastImageDirectory,
         "PNG 文件 (*.png);;JPEG 文件 (*.jpg);;BMP 文件 (*.bmp);;所有文件 (*)");
     
     if (!fileName.isEmpty()) {
         if (m_imageViewer->saveImage(fileName)) {
+            // 保存选择的目录路径
+            QFileInfo fileInfo(fileName);
+            saveLastImageDirectory(fileInfo.absolutePath());
+            
             statusBar()->showMessage("图像已导出到: " + fileName, 3000);
         } else {
             QMessageBox::warning(this, "错误", "导出图像失败");
@@ -463,4 +477,20 @@ void MainWindow::setControlsEnabled(bool enabled)
     m_expansionGroup->setEnabled(enabled);
     m_colorGroup->setEnabled(enabled);
     m_previewGroup->setEnabled(enabled);
+}
+
+void MainWindow::loadLastImageDirectory()
+{
+    QSettings settings;
+    m_lastImageDirectory = settings.value("lastImageDirectory", 
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation)).toString();
+}
+
+void MainWindow::saveLastImageDirectory(const QString &directory)
+{
+    if (!directory.isEmpty()) {
+        m_lastImageDirectory = directory;
+        QSettings settings;
+        settings.setValue("lastImageDirectory", directory);
+    }
 }
