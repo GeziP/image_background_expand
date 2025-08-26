@@ -464,3 +464,159 @@ QColor ImageProcessor::calculateAverageColor(const QVector<QRgb> &pixels) const
         static_cast<int>(totalA / count)
     );
 }
+
+// 智能比例计算实现
+ImageProcessor::ExpansionValues ImageProcessor::calculateSmartExpansion(
+    const QImage &originalImage,
+    const QString &targetRatio,
+    const QString &distribution) const
+{
+    ExpansionValues result = {0, 0, 0, 0, false, "", "", ""};
+    
+    if (originalImage.isNull()) {
+        result.errorMessage = "图像为空";
+        return result;
+    }
+    
+    // 解析目标比例
+    QPair<double, double> ratio = parseRatioString(targetRatio);
+    if (ratio.first <= 0 || ratio.second <= 0) {
+        result.errorMessage = "无效的比例格式，请使用如 '16:9' 或 '190:66' 的格式";
+        return result;
+    }
+    
+    // 计算最优扩展方案
+    result = calculateOptimalExpansion(originalImage.size(), ratio, distribution);
+    
+    return result;
+}
+
+QPair<double, double> ImageProcessor::parseRatioString(const QString &ratio) const
+{
+    if (ratio.isEmpty()) {
+        return qMakePair(0.0, 0.0);
+    }
+    
+    // 支持多种分隔符：: x / . 
+    QStringList parts;
+    if (ratio.contains(':')) {
+        parts = ratio.split(':');
+    } else if (ratio.contains('x')) {
+        parts = ratio.split('x');
+    } else if (ratio.contains('/')) {
+        parts = ratio.split('/');
+    } else if (ratio.contains('.')) {
+        parts = ratio.split('.');
+    } else {
+        // 如果没有分隔符，假设是单个数字，高度为1
+        return qMakePair(ratio.toDouble(), 1.0);
+    }
+    
+    if (parts.size() != 2) {
+        return qMakePair(0.0, 0.0);
+    }
+    
+    bool ok1, ok2;
+    double width = parts[0].trimmed().toDouble(&ok1);
+    double height = parts[1].trimmed().toDouble(&ok2);
+    
+    if (!ok1 || !ok2 || width <= 0 || height <= 0) {
+        return qMakePair(0.0, 0.0);
+    }
+    
+    return qMakePair(width, height);
+}
+
+ImageProcessor::ExpansionValues ImageProcessor::calculateOptimalExpansion(
+    const QSize &originalSize,
+    const QPair<double, double> &ratio,
+    const QString &distribution) const
+{
+    ExpansionValues result = {0, 0, 0, 0, false, "", "", ""};
+    
+    // 计算两种方案：固定宽度和固定高度
+    // 方案1：固定宽度，计算目标高度
+    int targetHeight1 = static_cast<int>(
+        originalSize.width() * (ratio.second / ratio.first) + 0.5);
+    int heightExpansion1 = qMax(0, targetHeight1 - originalSize.height());
+    
+    // 方案2：固定高度，计算目标宽度
+    int targetWidth2 = static_cast<int>(
+        originalSize.height() * (ratio.first / ratio.second) + 0.5);
+    int widthExpansion2 = qMax(0, targetWidth2 - originalSize.width());
+    
+    // 检查是否需要扩展
+    if (heightExpansion1 == 0 && widthExpansion2 == 0) {
+        result.errorMessage = QString("图像当前尺寸(%1x%2)已满足或超过目标比例要求，无需扩展")
+            .arg(originalSize.width()).arg(originalSize.height());
+        return result;
+    }
+    
+    // 选择扩展方案的逻辑
+    // 如果某个方案不需要扩展，说明原图在该维度已超过目标，应该选择需要扩展的方案
+    bool useWidthFixed;
+    if (heightExpansion1 == 0 && widthExpansion2 > 0) {
+        useWidthFixed = false; // 高度不需要扩展，选择需要扩展宽度的方案
+    } else if (widthExpansion2 == 0 && heightExpansion1 > 0) {
+        useWidthFixed = true;  // 宽度不需要扩展，选择需要扩展高度的方案
+    } else {
+        useWidthFixed = heightExpansion1 <= widthExpansion2; // 都需要扩展时，选择扩展像素较少的方案
+    }
+    
+    if (useWidthFixed) {
+        // 使用方案1：固定宽度，扩展高度
+        result.expansionType = "height";
+        result.description = QString("固定宽度%1，扩展高度至%2")
+            .arg(originalSize.width()).arg(targetHeight1);
+        
+        QPair<int, int> topBottom = distributeExpansion(heightExpansion1, distribution, "height");
+        result.top = topBottom.first;
+        result.bottom = topBottom.second;
+        result.left = 0;
+        result.right = 0;
+    } else {
+        // 使用方案2：固定高度，扩展宽度
+        result.expansionType = "width";
+        result.description = QString("固定高度%1，扩展宽度至%2")
+            .arg(originalSize.height()).arg(targetWidth2);
+        
+        QPair<int, int> leftRight = distributeExpansion(widthExpansion2, distribution, "width");
+        result.left = leftRight.first;
+        result.right = leftRight.second;
+        result.top = 0;
+        result.bottom = 0;
+    }
+    
+    result.isValid = true;
+    return result;
+}
+
+QPair<int, int> ImageProcessor::distributeExpansion(
+    int totalExpansion, 
+    const QString &distribution,
+    const QString &expansionType) const
+{
+    if (totalExpansion <= 0) {
+        return qMakePair(0, 0);
+    }
+    
+    if (distribution == "center") {
+        // 居中分布
+        int half = totalExpansion / 2;
+        return qMakePair(half, totalExpansion - half);
+    } else if ((distribution == "start") || 
+               (expansionType == "height" && distribution == "top") ||
+               (expansionType == "width" && distribution == "left")) {
+        // 全部分配给起始方向（上方或左侧）
+        return qMakePair(totalExpansion, 0);
+    } else if ((distribution == "end") ||
+               (expansionType == "height" && distribution == "bottom") ||
+               (expansionType == "width" && distribution == "right")) {
+        // 全部分配给结束方向（下方或右侧）
+        return qMakePair(0, totalExpansion);
+    } else {
+        // 默认居中分布
+        int half = totalExpansion / 2;
+        return qMakePair(half, totalExpansion - half);
+    }
+}

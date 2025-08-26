@@ -21,6 +21,10 @@
 #include <QKeySequence>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QLineEdit>
+#include <QComboBox>
+#include <QRegularExpression>
+#include <QRegularExpressionValidator>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -134,6 +138,46 @@ void MainWindow::createControlPanel()
     expansionLayout->addWidget(m_rightSpinBox, 3, 1);
     
     mainLayout->addWidget(m_expansionGroup);
+    
+    // 智能比例控制组
+    m_ratioGroup = new QGroupBox("智能比例调节（可选）");
+    QGridLayout *ratioLayout = new QGridLayout(m_ratioGroup);
+    
+    // 目标比例输入
+    ratioLayout->addWidget(new QLabel("目标比例:"), 0, 0);
+    m_targetRatioEdit = new QLineEdit;
+    m_targetRatioEdit->setPlaceholderText("如: 190:66 或 16:9");
+    
+    // 设置输入验证器，支持多种格式
+    QRegularExpression ratioRegex("^\\d+([.:x/]\\d+)?$");
+    QRegularExpressionValidator *validator = new QRegularExpressionValidator(ratioRegex, this);
+    m_targetRatioEdit->setValidator(validator);
+    ratioLayout->addWidget(m_targetRatioEdit, 0, 1);
+    
+    // 扩展类型显示
+    ratioLayout->addWidget(new QLabel("扩展方式:"), 1, 0);
+    m_expansionTypeLabel = new QLabel("自动检测");
+    m_expansionTypeLabel->setStyleSheet("color: gray; font-style: italic;");
+    ratioLayout->addWidget(m_expansionTypeLabel, 1, 1);
+    
+    // 扩展分布选择
+    ratioLayout->addWidget(new QLabel("扩展分布:"), 2, 0);
+    m_distributionCombo = new QComboBox;
+    m_distributionCombo->addItem("居中分布", "center");
+    ratioLayout->addWidget(m_distributionCombo, 2, 1);
+    
+    // 应用按钮
+    m_applyRatioButton = new QPushButton("计算并应用比例");
+    m_applyRatioButton->setEnabled(false);
+    ratioLayout->addWidget(m_applyRatioButton, 3, 0, 1, 2);
+    
+    // 计算结果显示
+    m_calculationInfoLabel = new QLabel("请输入目标比例，计算后会自动填充上方的扩展框");
+    m_calculationInfoLabel->setWordWrap(true);
+    m_calculationInfoLabel->setStyleSheet("color: gray; font-size: 10px;");
+    ratioLayout->addWidget(m_calculationInfoLabel, 4, 0, 1, 2);
+    
+    mainLayout->addWidget(m_ratioGroup);
     
     // 颜色选择组
     m_colorGroup = new QGroupBox("背景颜色");
@@ -303,6 +347,33 @@ void MainWindow::connectSignals()
     connect(m_resetButton, &QPushButton::clicked,
             this, &MainWindow::resetExpansion);
     
+    // 智能比例控制信号 - 改为按钮触发模式
+    connect(m_targetRatioEdit, &QLineEdit::textChanged,
+            this, [this]() {
+                // 只在有内容时启用按钮，不进行实时计算
+                bool hasContent = !m_targetRatioEdit->text().trimmed().isEmpty();
+                bool hasImage = m_imageViewer->hasImage();
+                m_applyRatioButton->setEnabled(hasContent && hasImage);
+                
+                if (!hasContent) {
+                    m_calculationInfoLabel->setText("请输入目标比例，计算后会自动填充上方的扩展框");
+                    m_expansionTypeLabel->setText("自动检测");
+                    m_expansionTypeLabel->setStyleSheet("color: gray; font-style: italic;");
+                    m_distributionCombo->clear();
+                    m_distributionCombo->addItem("居中分布", "center");
+                } else if (hasContent && hasImage) {
+                    m_calculationInfoLabel->setText("点击按钮或按回车键进行计算");
+                    m_calculationInfoLabel->setStyleSheet("color: blue; font-size: 10px;");
+                }
+            });
+    
+    // 回车键也可以触发计算
+    connect(m_targetRatioEdit, &QLineEdit::returnPressed,
+            this, &MainWindow::onRatioCalculationRequested);
+    
+    connect(m_applyRatioButton, &QPushButton::clicked,
+            this, &MainWindow::onRatioCalculationRequested);
+    
     // 图像处理器信号
     connect(m_imageProcessor, &ImageProcessor::imageProcessed,
             m_imageViewer, &ImageViewer::setProcessedImage);
@@ -403,7 +474,106 @@ void MainWindow::resetExpansion()
     m_leftSpinBox->setValue(0);
     m_rightSpinBox->setValue(0);
     
+    // 同时重置比例输入
+    m_targetRatioEdit->clear();
+    m_expansionTypeLabel->setText("自动检测");
+    m_expansionTypeLabel->setStyleSheet("color: gray; font-style: italic;");
+    m_calculationInfoLabel->setText("请输入目标比例，计算后会自动填充上方的扩展框");
+    m_applyRatioButton->setEnabled(false);
+    
+    // 重置分布选择
+    m_distributionCombo->clear();
+    m_distributionCombo->addItem("居中分布", "center");
+    
     updatePreview();
+}
+
+void MainWindow::onRatioCalculationRequested()
+{
+    if (!m_imageViewer->hasImage()) {
+        QMessageBox::information(this, "提示", "请先打开一个图像文件");
+        return;
+    }
+    
+    QString targetRatio = m_targetRatioEdit->text().trimmed();
+    if (targetRatio.isEmpty()) {
+        QMessageBox::warning(this, "错误", "请输入目标比例");
+        return;
+    }
+    
+    QString distribution = m_distributionCombo->currentData().toString();
+    
+    // 计算智能扩展
+    ImageProcessor::ExpansionValues expansion = m_imageProcessor->calculateSmartExpansion(
+        m_imageViewer->originalImage(), targetRatio, distribution);
+    
+    if (!expansion.isValid) {
+        QMessageBox::warning(this, "计算错误", expansion.errorMessage);
+        m_calculationInfoLabel->setText(QString("错误: %1").arg(expansion.errorMessage));
+        m_calculationInfoLabel->setStyleSheet("color: red; font-size: 10px;");
+        return;
+    }
+    
+    // 更新界面显示
+    updateCalculationDisplay(expansion);
+    
+    // 应用计算结果到SpinBox
+    m_topSpinBox->setValue(expansion.top);
+    m_bottomSpinBox->setValue(expansion.bottom);
+    m_leftSpinBox->setValue(expansion.left);
+    m_rightSpinBox->setValue(expansion.right);
+    
+    // 调试信息
+    statusBar()->showMessage(QString("已应用: 上%1 下%2 左%3 右%4")
+        .arg(expansion.top).arg(expansion.bottom)
+        .arg(expansion.left).arg(expansion.right), 3000);
+    
+    // 更新预览
+    updatePreview();
+}
+
+void MainWindow::onTargetRatioChanged()
+{
+    // 现在不再实时计算，这个函数保留为空
+}
+
+void MainWindow::updateCalculationDisplay(const ImageProcessor::ExpansionValues &expansion)
+{
+    // 更新扩展类型显示
+    m_expansionTypeLabel->setText(expansion.description);
+    m_expansionTypeLabel->setStyleSheet("color: blue; font-style: normal;");
+    
+    // 根据扩展类型动态更新分布选择选项
+    m_distributionCombo->clear();
+    m_distributionCombo->addItem("居中分布", "center");
+    if (expansion.expansionType == "height") {
+        m_distributionCombo->addItem("偏向上方", "top");
+        m_distributionCombo->addItem("偏向下方", "bottom");
+    } else {
+        m_distributionCombo->addItem("偏向左侧", "left");
+        m_distributionCombo->addItem("偏向右侧", "right");
+    }
+    
+    // 显示计算结果预览
+    QSize originalSize = m_imageViewer->imageSize();
+    int newWidth = originalSize.width() + expansion.left + expansion.right;
+    int newHeight = originalSize.height() + expansion.top + expansion.bottom;
+    
+    QString info = QString("原图: %1x%2 → 目标: %3x%4<br>"
+                          "扩展: 上%5 下%6 左%7 右%8")
+        .arg(originalSize.width()).arg(originalSize.height())
+        .arg(newWidth).arg(newHeight)
+        .arg(expansion.top).arg(expansion.bottom)
+        .arg(expansion.left).arg(expansion.right);
+    
+    m_calculationInfoLabel->setText(info);
+    m_calculationInfoLabel->setStyleSheet("color: blue; font-size: 10px;");
+}
+
+void MainWindow::updateCalculationInfo()
+{
+    // 这个函数现在不需要实时计算，保留空函数体
+    // 计算逻辑移动到按钮点击事件中
 }
 
 void MainWindow::updateStatusBar()
@@ -475,8 +645,16 @@ void MainWindow::updateColorButton()
 void MainWindow::setControlsEnabled(bool enabled)
 {
     m_expansionGroup->setEnabled(enabled);
+    m_ratioGroup->setEnabled(enabled);
     m_colorGroup->setEnabled(enabled);
     m_previewGroup->setEnabled(enabled);
+    
+    if (enabled) {
+        updateCalculationInfo();
+    } else {
+        m_calculationInfoLabel->setText("请先加载图像");
+        m_applyRatioButton->setEnabled(false);
+    }
 }
 
 void MainWindow::loadLastImageDirectory()

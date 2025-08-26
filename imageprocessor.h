@@ -31,6 +31,22 @@ public:
     // 边缘检测（用于智能扩展）
     QColor getEdgeColor(const QImage &image, Qt::Edge edge) const;
     
+    // 智能比例计算
+    struct ExpansionValues {
+        int top;
+        int bottom;
+        int left;
+        int right;
+        bool isValid;
+        QString errorMessage;
+        QString expansionType; // "width" 或 "height"
+        QString description;   // 扩展描述
+    };
+    
+    ExpansionValues calculateSmartExpansion(const QImage &originalImage,
+                                          const QString &targetRatio,
+                                          const QString &distribution) const;
+    
     // 取消当前处理
     void cancelProcessing();
     
@@ -75,6 +91,15 @@ private:
     QVector<QRgb> extractPixels(const QImage &image, const QRect &region) const;
     QColor calculateDominantColor(const QVector<QRgb> &pixels) const;
     QColor calculateAverageColor(const QVector<QRgb> &pixels) const;
+    
+    // 智能比例计算辅助函数
+    QPair<double, double> parseRatioString(const QString &ratio) const;
+    ExpansionValues calculateOptimalExpansion(const QSize &originalSize,
+                                             const QPair<double, double> &ratio,
+                                             const QString &distribution) const;
+    QPair<int, int> distributeExpansion(int totalExpansion, 
+                                       const QString &distribution,
+                                       const QString &expansionType) const;
 
     // 成员变量
     QTimer *m_processTimer;

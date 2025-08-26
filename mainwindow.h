@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QWidget>
 #include <QColor>
+#include "imageprocessor.h"
 
 QT_BEGIN_NAMESPACE
 class QAction;
@@ -21,10 +22,11 @@ class QGroupBox;
 class QSplitter;
 class QScrollArea;
 class QProgressBar;
+class QLineEdit;
+class QComboBox;
 QT_END_NAMESPACE
 
 class ImageViewer;
-class ImageProcessor;
 
 class MainWindow : public QMainWindow
 {
@@ -45,6 +47,12 @@ private slots:
     void onExpansionChanged();
     void onPreviewToggled(bool enabled);
     void resetExpansion();
+    
+    // 智能比例调节
+    void onRatioCalculationRequested();
+    void onTargetRatioChanged();
+    void updateCalculationInfo();
+    void updateCalculationDisplay(const ImageProcessor::ExpansionValues &expansion);
     
     // 界面更新
     void updateStatusBar();
@@ -94,6 +102,14 @@ private:
     QGroupBox *m_previewGroup;
     QCheckBox *m_previewCheckBox;
     QPushButton *m_resetButton;
+    
+    // 智能比例控制组
+    QGroupBox *m_ratioGroup;
+    QLineEdit *m_targetRatioEdit;
+    QLabel *m_expansionTypeLabel;
+    QComboBox *m_distributionCombo;
+    QPushButton *m_applyRatioButton;
+    QLabel *m_calculationInfoLabel;
     
     // 状态栏
     QStatusBar *m_statusBar;
